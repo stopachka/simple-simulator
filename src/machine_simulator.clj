@@ -1,77 +1,62 @@
 (ns machine-simulator)
 
-; factorial-instructions
-; ----------------------
+; factorial
+; ---------------
 
 (defn factorial [n]
-  (loop [counter 1
-         res 1]
-    (if (> counter n)
+  (loop [res 1
+         counter 1]
+    (if (< n counter)
       res
-      (recur (inc counter)
-             (* counter res)))))
+      (recur
+        (* counter res)
+        (inc counter)))))
 
 (def factorial-instructions
   '(
-    (assign counter (const 1))
-    (assign res (const 1))
+     start
 
-    loop
+     (test (op >) (reg counter) (reg n))
+     (branch (label done))
 
-    (test (op >) (reg counter) (reg n))
-    (branch (label done))
+     (assign res (op *) (reg counter) (reg res))
+     (assign counter (op +) (reg counter) (const 1))
+     (goto (label start))
 
-    (assign res (op *) (reg counter) (reg res))
-    (assign counter (op +) (reg counter) (const 1))
-    (goto (label loop))
-
-    done))
-
-; instructions
-; -------------
-
-(def tag first)
-(def drop-tag rest)
-(defn tag-of? [sym s] (= sym (tag s)))
-
-(defn extract-label->idx [raw-instructions]
-  (second
-    (reduce
-      (fn [[idx label->idx] part]
-        (if (symbol? part)
-          [idx (assoc label->idx part idx)]
-          [(inc idx) label->idx]))
-      [0 {}]
-      raw-instructions)))
-
-(defn extract-instructions [raw-instructions]
-  (vec (remove symbol? raw-instructions)))
-
-(comment
-  (extract-label->idx factorial-instructions)
-  (map-indexed vector (extract-instructions factorial-instructions)))
+     done))
 
 ; parse-primitive
 ; ---------------
 
-(defn parse-primitive [{:keys [registry-map label->idx] :as _data}
+(def ex-machine-state-v0
+  {:registry-map {'n 10 'res 1 'counter 1}
+   :label->idx {'start 0 'done 5}})
+
+(def tag first)
+(defn tag-of? [sym s] (= sym (tag s)))
+
+(defn parse-primitive [{:keys [registry-map label->idx] :as machine-state}
                        prim-exp]
-  (let [res (condp tag-of? prim-exp
-              'const
-              (second prim-exp)
-              'reg
-              (get registry-map (second prim-exp))
-              'label
-              (label->idx (second prim-exp)))]
-    res))
+  (condp tag-of? prim-exp
+    'const
+    (second prim-exp)
+    'reg
+    (get registry-map (second prim-exp))
+    'label
+    (label->idx (second prim-exp))))
 
 (comment
-  (parse-primitive {} '(const 3))
-  (parse-primitive {:registry-map {'foo 3}} '(reg foo))
-  (parse-primitive {:label->idx {'label-one 3}} '(label label-one)))
+  (parse-primitive ex-machine-state-v0 '(const 1))
+  (parse-primitive ex-machine-state-v0 '(reg n))
+  (parse-primitive ex-machine-state-v0 '(label done)))
 
 ; parse-operation
 ; ---------------
+
+(def ex-machine-state-v1
+  {:registry-map {'n 10 'res 1 'counter 1}
+   :label->idx {'start 0 'done 5}
+   :op-map {'* * '+ + '> >}})
 
 (def operation-sym (comp second first))
 (def operation-args rest)
@@ -83,12 +68,18 @@
     (apply op-fn evaled-args)))
 
 (comment
-  (parse-operation
-    {:registry-map {'bar 2} :op-map {'* *}}
-    '((op *) (const 3) (reg bar))))
+  (parse-operation ex-machine-state-v1 '((op >) (reg counter) (reg n)))
+  (parse-operation ex-machine-state-v1 '((op *) (reg counter) (reg res)))
+  (parse-operation ex-machine-state-v1 '((op +) (reg counter) (const 1))))
 
 ; assign
 ; ------
+
+(def ex-machine-state-v2
+  {:registry-map {'n 10 'res 1 'counter 1}
+   :label->idx {'start 0 'done 5}
+   :op-map {'* * '+ + '> >}
+   :idx 0})
 
 (def assign-reg-name second)
 (def assign-operator #(nth % 2))
@@ -108,51 +99,18 @@
   i.e (assign foo (op *) (const 2) (reg foo))"
   [data ins]
   (let [reg-name (assign-reg-name ins)
-        value (if (operation-exp? ins)
-                (parse-operation data (assign-operation-exp ins))
-                (parse-primitive data (assign-operator ins)))]
+        val (if (operation-exp? ins)
+              (parse-operation data (assign-operation-exp ins))
+              (parse-primitive data (assign-operator ins)))]
     (-> data
-        (assoc-in [:registry-map reg-name] value)
-        (update :pc inc))))
+        (assoc-in [:registry-map reg-name] val)
+        (update :idx inc))))
 
 (comment
-  (def m {:registry-map {'foo 2 'bar 3} :op-map {'+ +} :pc 0})
-  (exec-assign m '(assign foo (const 3)))
-  (exec-assign m '(assign foo (op +) (const 1) (reg foo))))
-
-; test
-; -------------
-
-(defn exec-test [data ins]
-  (-> data
-      (assoc :flag (parse-operation data (drop-tag ins)))
-      (update :pc inc)))
-
-(comment
-  (exec-test
-    {:registry-map {'bar 3 'foo 0} :pc 0 :op-map {'= =}}
-    '(test (op =) (const 2) (reg bar)))
-  (exec-test
-    {:registry-map {'bar 3 'foo 0} :pc 0 :op-map {'= =}}
-    '(test (op =) (const 3) (reg bar))))
-
-; branch
-; -------------
-
-(def branch-dest second)
-(defn exec-branch [data ins]
-  (let [dest (parse-primitive data (branch-dest ins))]
-    (if (:flag data)
-      (assoc data :pc dest)
-      (update data :pc inc))))
-
-(comment
-  (exec-branch
-    {:label->idx {'foo 3} :flag false :pc 0}
-    '(branch (label foo)))
-  (exec-branch
-    {:label->idx {'foo 3} :flag true :pc 0}
-    '(branch (label foo))))
+  (select-keys (exec-assign ex-machine-state-v2 '(assign counter (const 10)))
+               [:registry-map :idx])
+  (select-keys (exec-assign ex-machine-state-v2 '(assign counter (op +) (reg counter) (const 1)))
+               [:registry-map :idx]))
 
 ; goto
 ; -------------
@@ -160,16 +118,56 @@
 (def goto-dest second)
 
 (defn exec-goto [data ins]
-  (assoc data :pc (parse-primitive data (goto-dest ins))))
+  (assoc data :idx (parse-primitive data (goto-dest ins))))
 
 (comment
-  (exec-goto {:label->idx {'foo 3}} '(goto (label foo)))
-  (exec-goto {:registry-map {'foo 3}} '(goto (reg foo))))
+  (select-keys (exec-goto ex-machine-state-v2 '(goto (label done)))
+               [:label->idx :idx]))
 
-; parse
+; test
+; ----
+
+(def ex-machine-state-v3
+  {:registry-map {'n 10 'res 1 'counter 1}
+   :label->idx {'start 0 'done 5}
+   :op-map {'* * '+ + '> >}
+   :idx 0
+   :test-passed? false})
+
+(def drop-tag rest)
+
+(defn exec-test [data ins]
+  (-> data
+      (assoc :test-passed? (parse-operation data (drop-tag ins)))
+      (update :idx inc)))
+
+(comment
+  (:test-passed? (exec-test ex-machine-state-v3 '(test (op >) (reg counter) (reg n))))
+  (:test-passed? (exec-test ex-machine-state-v3 '(test (op >) (reg n) (reg counter)))))
+
+; branch
+; -------
+
+(def branch-dest second)
+(defn exec-branch [data ins]
+  (let [dest (parse-primitive data (branch-dest ins))]
+    (if (:test-passed? data)
+      (assoc data :idx dest)
+      (update data :idx inc))))
+
+(comment
+  (exec-branch
+    {:label->idx {'done 5} :test-passed? false :idx 0}
+    '(branch (label done)))
+  (exec-branch
+    {:label->idx {'done 5} :test-passed? true :idx 0}
+    '(branch (label done))))
+
+
+; exec
 ; -------------
 
-(defn exec-instruction [data ins]
+(defn exec-ins [data ins]
   (let [type->f {'assign exec-assign
                  'test exec-test
                  'branch exec-branch
@@ -177,6 +175,29 @@
         f (or (type->f (tag ins))
               (throw (Exception. "Unexpected instruction")))]
     (f data ins)))
+
+(comment
+  (:registry-map (exec-ins ex-machine-state-v3 '(assign counter (const 5)))))
+
+; instructions
+; -------------
+
+(defn extract-label->idx [raw-instructions]
+  (second
+    (reduce
+      (fn [[idx label->idx] part]
+        (if (symbol? part)
+          [idx (assoc label->idx part idx)]
+          [(inc idx) label->idx]))
+      [0 {}]
+      raw-instructions)))
+
+(defn extract-instructions [raw-instructions]
+  (vec (remove symbol? raw-instructions)))
+
+(comment
+  (extract-label->idx factorial-instructions)
+  (extract-instructions factorial-instructions))
 
 ; run
 ; -------------
@@ -186,16 +207,18 @@
         instructions (extract-instructions raw-instructions)
         initial-machine-state {:registry-map registry-map
                                :op-map op-map
-                               :pc 0
-                               :flag nil
+                               :idx 0
+                               :test-passed? nil
                                :label->idx label->idx}]
     (loop [machine-state initial-machine-state]
-      (if-let [ins (nth instructions (:pc machine-state) nil)]
-        (recur (exec-instruction machine-state ins))
+      (if-let [ins (nth instructions (:idx machine-state) nil)]
+        (recur (exec-ins machine-state ins))
         machine-state))))
 
 (comment
-  (run
-    {'n 5 'counter nil 'res nil}
-    {'* * '> > '+ +}
-    factorial-instructions))
+  (get-in
+    (run
+      {'n 5 'counter 1 'res 1}
+      {'* * '> > '+ +}
+      factorial-instructions)
+    [:registry-map 'res]))
