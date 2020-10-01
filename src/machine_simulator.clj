@@ -1,68 +1,36 @@
 (ns machine-simulator)
 
-(declare make-execution-proc)
+(def tag first)
+(defn tag-of? [sym s] (= sym (tag s)))
 
 ; build instructions
 ; -------------
 
-(def instruction-fn second)
-(def body-tag first)
+(defn extract-label->idx [raw-instructions]
+  (second
+    (reduce
+      (fn [[idx label->idx] part]
+        (if (symbol? part)
+          [idx
+           (assoc label->idx part idx)]
+          [(inc idx)
+           label->idx]))
+      [0 {}]
+      raw-instructions)))
 
-(defn extract-labels [raw-instructions]
-  (rest (reduce
-          (fn [[idx label->idx instructions] part]
-            (if (symbol? part)
-              [idx
-               (assoc label->idx part (inc idx))
-               instructions]
-              [(inc idx)
-               label->idx
-               (conj instructions part)]))
-          [-1 {} []]
-          raw-instructions)))
+(defn extract-instructions [raw-instructions]
+  (remove symbol? raw-instructions))
 
 (comment
-  (let [[label->idx instructions]
-        (extract-labels '((assign foo (const 1))
-                          label-one
-                          (test (op =) (const 1) (reg foo))
-                          (branch (label label-two))
-                          label-two
-                          (assign bar (const 2))))]
-    (println label->idx)
-    (println (map-indexed vector instructions))))
+  (let [raw-ins '((assign foo (const 1))
+                  label-one
+                  (test (op =) (const 1) (reg foo))
+                  (branch (label label-two))
+                  label-two
+                  (assign bar (const 2)))]
+    [(extract-label->idx raw-ins)
+     (map-indexed vector (extract-instructions raw-ins))]))
 
-(defn tag-of? [sym body] (= sym (body-tag body)))
-
-; assign data model
-; -------------
-
-(def assign-reg-name
-  "(assign foo ...)"
-  second)
-
-(comment (assign-reg-name '(assign foo (const 1))))
-
-(def assign-value-exp
-  "((op *) (const 1) (reg b) ..."
-  (partial drop 2))
-
-(comment (assign-value-exp '(assign foo (op *) (const 1) (const 2))))
-(comment (assign-value-exp '(assign foo (const 1))))
-
-(def operation-exp?
-  "determines if assign using an `op`"
-  (comp (partial tag-of? 'op) #(nth % 2)))
-
-(def operation-sym (comp second first))
-(def operation-args rest)
-
-(def assign-operation-exp (partial drop 2))
-(comment (assign-operation-exp '(assign foo (op *) (const 3) (const 2))))
-
-(def assign-primitive-exp #(nth % 2))
-
-(operation-exp? '(assign foo (op *) (const 1) (const 2)))
 
 ; parse-primitive
 ; ---------------
@@ -92,6 +60,9 @@
 ; parse-operation
 ; ---------------
 
+(def operation-sym (comp second first))
+(def operation-args rest)
+
 (defn parse-operation [{:keys [op-map] :as data} op-exp]
   (let [op-fn (get op-map (operation-sym op-exp))
         evaled-args (map (partial parse-primitive data)
@@ -104,7 +75,20 @@
     '((op *) (const 3) (reg bar))))
 
 ; assign
-; -------------
+; ------
+
+(def assign-reg-name second)
+
+(def operation-exp?
+  "determines if assign using an `op`"
+  (comp (partial tag-of? 'op) #(nth % 2)))
+
+(def assign-operation-exp (partial drop 2))
+(comment (assign-operation-exp '(assign foo (op *) (const 3) (const 2))))
+
+(def assign-primitive-exp #(nth % 2))
+
+(operation-exp? '(assign foo (op *) (const 1) (const 2)))
 
 (defn parse-assign [data body]
   (let [reg-name (assign-reg-name body)
@@ -184,21 +168,21 @@
 ; parse
 ; -------------
 
-(defn parse-instruction [data body]
+(defn parse-instruction [data instruction]
   (let [type->f {'assign parse-assign
                  'test parse-test
                  'branch parse-branch
                  'goto parse-goto}
-        f (or (type->f (body-tag body))
+        f (or (type->f (tag instruction))
               (throw (Exception. "unexpected instruction")))]
-    (f data body)))
-
+    (f data instruction)))
 
 ; run
 ; -------------
 
 (defn run [registry-map op-map raw-instructions]
-  (let [[label->idx instructions] (extract-labels raw-instructions)
+  (let [label->idx (extract-label->idx raw-instructions)
+        instructions (extract-instructions raw-instructions)
         initial-data {:registry-map registry-map
                       :op-map op-map
                       :stack []
