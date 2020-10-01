@@ -19,25 +19,20 @@
 
     done))
 
-; misc
-; ----
+; instructions
+; -------------
 
 (def tag first)
 (def drop-tag rest)
 (defn tag-of? [sym s] (= sym (tag s)))
-
-; build instructions
-; -------------
 
 (defn extract-label->idx [raw-instructions]
   (second
     (reduce
       (fn [[idx label->idx] part]
         (if (symbol? part)
-          [idx
-           (assoc label->idx part idx)]
-          [(inc idx)
-           label->idx]))
+          [idx (assoc label->idx part idx)]
+          [(inc idx) label->idx]))
       [0 {}]
       raw-instructions)))
 
