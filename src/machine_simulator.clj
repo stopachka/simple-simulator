@@ -183,7 +183,6 @@
         instructions (extract-instructions raw-instructions)
         initial-machine-state {:registry-map registry-map
                                :op-map op-map
-                               :stack []
                                :pc 0
                                :flag nil
                                :label->idx label->idx}]
@@ -192,13 +191,8 @@
         (recur (exec-instruction machine-state ins))
         machine-state))))
 
-(def default-op-map {'* * '/ /
-                     '> > '>= >=
-                     '< < '<= <=
-                     '+ + '- -
-                     '= =})
 (comment
   (run
     {'n 5 'counter nil 'res nil}
-    default-op-map
+    {'* * '> > '+ +}
     factorial-instructions))
