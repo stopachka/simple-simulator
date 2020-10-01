@@ -23,6 +23,7 @@
 ; ----
 
 (def tag first)
+(def drop-tag rest)
 (defn tag-of? [sym s] (= sym (tag s)))
 
 ; build instructions
@@ -87,85 +88,76 @@
 ; ------
 
 (def assign-reg-name second)
+(def assign-operator #(nth % 2))
 
 (def operation-exp?
-  "determines if assign using an `op`"
-  (comp (partial tag-of? 'op) #(nth % 2)))
+  (comp (partial tag-of? 'op) assign-operator))
 
 (def assign-operation-exp (partial drop 2))
-(comment (assign-operation-exp '(assign foo (op *) (const 3) (const 2))))
 
-(def assign-primitive-exp #(nth % 2))
+(defn exec-assign
+  "Assign comes in two forms:
 
-(operation-exp? '(assign foo (op *) (const 1) (const 2)))
+  (assign reg-name <primitive-op>)
+  i.e (assign foo (const 1))
 
-(defn exec-assign [data body]
-  (let [reg-name (assign-reg-name body)
-        value (if (operation-exp? body)
-                (parse-operation data (assign-operation-exp body))
-                (parse-primitive data (assign-primitive-exp body)))]
+  (assign reg-name <operation> <args...>)
+  i.e (assign foo (op *) (const 2) (reg foo))"
+  [data ins]
+  (let [reg-name (assign-reg-name ins)
+        value (if (operation-exp? ins)
+                (parse-operation data (assign-operation-exp ins))
+                (parse-primitive data (assign-operator ins)))]
     (-> data
         (assoc-in [:registry-map reg-name] value)
         (update :pc inc))))
 
 (comment
-  (let [m {:registry-map {'foo 2 'bar 3} :op-map {'* *} :pc 0}]
-    [(exec-assign
-       m '(assign foo (const 1)))
-     (exec-assign
-       m '(assign foo (op *) (const 2) (reg bar)))]))
+  (def m {:registry-map {'foo 2 'bar 3} :op-map {'+ +} :pc 0})
+  (exec-assign m '(assign foo (const 3)))
+  (exec-assign m '(assign foo (op +) (const 1) (reg foo))))
 
 ; test
 ; -------------
 
-(def test-condition rest)
-
-(defn exec-test [data body]
+(defn exec-test [data ins]
   (-> data
-      (assoc :flag (parse-operation data (test-condition body)))
+      (assoc :flag (parse-operation data (drop-tag ins)))
       (update :pc inc)))
 
 (comment
   (exec-test
-    {:registry-map {'bar 2 'foo 0}
-     :pc 0
-     :op-map {'= =}}
+    {:registry-map {'bar 2 'foo 0} :pc 0 :op-map {'= =}}
     '(test (op =) (const 3) (reg bar)))
   (exec-test
-    {:registry-map {'bar 2 'foo 0}
-     :pc 0
-     :op-map {'= =}}
+    {:registry-map {'bar 2 'foo 0} :pc 0 :op-map {'= =}}
     '(test (op =) (const 2) (reg bar))))
 
 ; branch
 ; -------------
 
 (def branch-dest second)
-(defn exec-branch [data body]
-  (let [dest (parse-primitive data (branch-dest body))]
+(defn exec-branch [data ins]
+  (let [dest (parse-primitive data (branch-dest ins))]
     (if (:flag data)
       (assoc data :pc dest)
       (update data :pc inc))))
 
 (comment
   (exec-branch
-    {:label->idx {'foo 10}
-     :flag false
-     :pc 0}
+    {:label->idx {'foo 10} :flag false :pc 0}
     '(branch (label foo)))
   (exec-branch
-    {:label->idx {'foo 10}
-     :flag true
-     :pc 0}
+    {:label->idx {'foo 10} :flag true :pc 0}
     '(branch (label foo))))
 
 ; goto
 ; -------------
+
 (def goto-dest second)
 
-(defn exec-goto [data body]
-  (let [dest (parse-primitive data (goto-dest body))]
-    (assoc data :pc dest)))
+(defn exec-goto [data ins]
+  (assoc data :pc (parse-primitive data (goto-dest ins))))
 
 (comment
   (exec-goto {:label->idx {'foo 10}} '(goto (label foo)))
@@ -174,14 +166,14 @@
 ; parse
 ; -------------
 
-(defn exec-instruction [data instruction]
+(defn exec-instruction [data ins]
   (let [type->f {'assign exec-assign
                  'test exec-test
                  'branch exec-branch
                  'goto exec-goto}
-        f (or (type->f (tag instruction))
-              (throw (Exception. "unexpected instruction")))]
-    (f data instruction)))
+        f (or (type->f (tag ins))
+              (throw (Exception. "Unexpected instruction")))]
+    (f data ins)))
 
 ; run
 ; -------------
@@ -196,7 +188,6 @@
                                :flag nil
                                :label->idx label->idx}]
     (loop [machine-state initial-machine-state]
-      (println (nth instructions (:pc machine-state) nil))
       (if-let [ins (nth instructions (:pc machine-state) nil)]
         (recur (exec-instruction machine-state ins))
         machine-state))))
@@ -208,6 +199,6 @@
                      '= =})
 (comment
   (run
-    {'n 10 'counter nil 'res nil}
+    {'n 5 'counter nil 'res nil}
     default-op-map
     factorial-instructions))
