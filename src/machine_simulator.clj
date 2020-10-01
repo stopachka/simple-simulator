@@ -37,7 +37,7 @@
       raw-instructions)))
 
 (defn extract-instructions [raw-instructions]
-  (remove symbol? raw-instructions))
+  (vec (remove symbol? raw-instructions)))
 
 (comment
   (extract-label->idx factorial-instructions)
@@ -76,7 +76,7 @@
 
 (comment
   (parse-operation
-    {:registry-map {'bar 2 'foo 0} :op-map {'* *}}
+    {:registry-map {'bar 2} :op-map {'* *}}
     '((op *) (const 3) (reg bar))))
 
 ; assign
@@ -122,11 +122,11 @@
 
 (comment
   (exec-test
-    {:registry-map {'bar 2 'foo 0} :pc 0 :op-map {'= =}}
-    '(test (op =) (const 3) (reg bar)))
+    {:registry-map {'bar 3 'foo 0} :pc 0 :op-map {'= =}}
+    '(test (op =) (const 2) (reg bar)))
   (exec-test
-    {:registry-map {'bar 2 'foo 0} :pc 0 :op-map {'= =}}
-    '(test (op =) (const 2) (reg bar))))
+    {:registry-map {'bar 3 'foo 0} :pc 0 :op-map {'= =}}
+    '(test (op =) (const 3) (reg bar))))
 
 ; branch
 ; -------------
@@ -140,10 +140,10 @@
 
 (comment
   (exec-branch
-    {:label->idx {'foo 10} :flag false :pc 0}
+    {:label->idx {'foo 3} :flag false :pc 0}
     '(branch (label foo)))
   (exec-branch
-    {:label->idx {'foo 10} :flag true :pc 0}
+    {:label->idx {'foo 3} :flag true :pc 0}
     '(branch (label foo))))
 
 ; goto
@@ -155,8 +155,8 @@
   (assoc data :pc (parse-primitive data (goto-dest ins))))
 
 (comment
-  (exec-goto {:label->idx {'foo 10}} '(goto (label foo)))
-  (exec-goto {:registry-map {'foo 5}} '(goto (reg foo))))
+  (exec-goto {:label->idx {'foo 3}} '(goto (label foo)))
+  (exec-goto {:registry-map {'foo 3}} '(goto (reg foo))))
 
 ; parse
 ; -------------
