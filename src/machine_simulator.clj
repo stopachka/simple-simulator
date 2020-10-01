@@ -3,6 +3,14 @@
 ; factorial-instructions
 ; ----------------------
 
+(defn factorial [n]
+  (loop [counter 1
+         res 1]
+    (if (> counter n)
+      res
+      (recur (inc counter)
+             (* counter res)))))
+
 (def factorial-instructions
   '(
     (assign counter (const 1))
