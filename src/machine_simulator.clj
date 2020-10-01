@@ -9,17 +9,17 @@
 (def body-tag first)
 
 (defn extract-labels [raw-instructions]
-      (rest (reduce
-              (fn [[idx label->idx instructions] part]
-                  (if (symbol? part)
-                    [idx
-                     (assoc label->idx part (inc idx))
-                     instructions]
-                    [(inc idx)
-                     label->idx
-                     (conj instructions part)]))
-              [-1 {} []]
-              raw-instructions)))
+  (rest (reduce
+          (fn [[idx label->idx instructions] part]
+            (if (symbol? part)
+              [idx
+               (assoc label->idx part (inc idx))
+               instructions]
+              [(inc idx)
+               label->idx
+               (conj instructions part)]))
+          [-1 {} []]
+          raw-instructions)))
 
 (comment
   (let [[label->idx instructions]
@@ -29,40 +29,8 @@
                           (branch (label label-two))
                           label-two
                           (assign bar (const 2))))]
-       (println label->idx)
-       (println (map-indexed vector instructions))))
-
-(defn assemble-instructions
-      "Takes a list of raw instructions
-      '(label-one
-        (assign foo (const 1))
-        (goto label-one))
-
-        and returns two things:
-        a. label->idx : a map of labels to their corresponding
-          index in the instruction list
-
-          {'label-one 0}
-
-        b. instruction tuples
-          [[(assign foo (const 1)) f]
-           [(goto (label label-one)) f]]
-
-         f are assembled procedures, that transform a machine
-         based on the instructions
-      "
-      [raw-instructions]
-      (let [[label->idx instructions] (extract-labels raw-instructions)]
-           [label->idx
-            (mapv (fn [body] [body (make-execution-proc body)]) instructions)]))
-
-(comment
-  (assemble-instructions
-    '((assign foo (const 1))
-      label-one
-      (test (op =) (const 1) (reg foo))
-      (branch (label label-two))
-      label-two)))
+    (println label->idx)
+    (println (map-indexed vector instructions))))
 
 (defn tag-of? [sym body] (= sym (body-tag body)))
 
@@ -86,6 +54,9 @@
   "determines if assign using an `op`"
   (comp (partial tag-of? 'op) #(nth % 2)))
 
+(def operation-sym (comp second first))
+(def operation-args rest)
+
 (def assign-operation-exp (partial drop 2))
 (comment (assign-operation-exp '(assign foo (op *) (const 3) (const 2))))
 
@@ -93,248 +64,152 @@
 
 (operation-exp? '(assign foo (op *) (const 1) (const 2)))
 
-; make expressions
-; -------------
+; parse-primitive
+; ---------------
 
-(defn make-primitive-proc [prim-exp]
-      (fn [{:keys [registry-map label->idx] :as data}]
-          (let [res (condp tag-of? prim-exp
-                           'const
-                           (second prim-exp)
-                           'reg
-                           (get registry-map (second prim-exp))
-                           'label
-                           (label->idx (second prim-exp)))]
-               res)))
-
-(comment
-  (let [f (make-assign-proc '(assign foo (const 3)))]
-       (f {:registry-map {'foo 0}
-           :op-map {}
-           :pc 0}))
-  (let [f (make-assign-proc '(assign foo (reg bar)))]
-       (f {:registry-map {'foo 0 'bar "hello"}
-           :op-map {}
-           :pc 0
-           :instructions []}))
-  (let [f (make-assign-proc '(assign foo (label bar)))]
-       (f {:registry-map {'foo 0}
-           :op-map {}
-           :pc 0
-           :instructions '[[nil (assign)] [bar nil]]})))
-
-(def operation-sym (comp second first))
-(def operation-args rest)
-
-(defn make-operation-proc [value-exp]
-      (let [op-sym (operation-sym value-exp)
-            op-arg-fns (map make-primitive-proc (operation-args value-exp))]
-           (fn [{:keys [op-map] :as data}]
-               (let [op-fn (get op-map op-sym)
-                     evaled-args (map (fn [f] (f data)) op-arg-fns)]
-                    (apply op-fn evaled-args)))))
+(defn parse-primitive [{:keys [registry-map label->idx] :as _data}
+                       prim-exp]
+  (let [res (condp tag-of? prim-exp
+              'const
+              (second prim-exp)
+              'reg
+              (get registry-map (second prim-exp))
+              'label
+              (label->idx (second prim-exp)))]
+    res))
 
 (comment
-  (let [f (make-assign-proc '(assign foo (op *) (const 3) (reg bar)))]
-       (f {:registry-map {'bar 2 'foo 0}
-           :pc 0
-           :op-map {'* *}
-           :instructions []})))
+  (parse-primitive
+    {:registry-map {'foo 1}}
+    '(const 3))
+  (parse-primitive
+    {:registry-map {'foo 2}}
+    '(reg foo))
+  (parse-primitive
+    {:registry-map {'foo 0} :label->idx {'label-one 1}}
+    '(label label-one)))
+
+; parse-operation
+; ---------------
+
+(defn parse-operation [{:keys [op-map] :as data} op-exp]
+  (let [op-fn (get op-map (operation-sym op-exp))
+        evaled-args (map (partial parse-primitive data)
+                         (operation-args op-exp))]
+    (apply op-fn evaled-args)))
+
+(comment
+  (parse-operation
+    {:registry-map {'bar 2 'foo 0} :op-map {'* *}}
+    '((op *) (const 3) (reg bar))))
 
 ; assign
 ; -------------
-(defn make-assign-proc [body]
-      (let [reg-name (assign-reg-name body)
-            value-proc (if (operation-exp? body)
-                         (make-operation-proc (assign-operation-exp body))
-                         (make-primitive-proc (assign-primitive-exp body)))]
-           (fn [data]
-               (let [new-value (value-proc data)]
-                    (-> data
-                        (assoc-in [:registry-map reg-name] new-value)
-                        (update :pc inc))))))
+
+(defn parse-assign [data body]
+  (let [reg-name (assign-reg-name body)
+        value (if (operation-exp? body)
+                (parse-operation data (assign-operation-exp body))
+                (parse-primitive data (assign-primitive-exp body)))]
+    (-> data
+        (assoc-in [:registry-map reg-name] value)
+        (update :pc inc))))
+
+(comment
+  (let [m {:registry-map {'foo 2 'bar 3} :op-map {'* *} :pc 0}]
+    [(parse-assign
+       m '(assign foo (const 1)))
+     (parse-assign
+       m '(assign foo (op *) (const 2) (reg bar)))]))
 
 (def test-condition rest)
 
 ; test
 ; -------------
-(defn make-test-proc [body]
-      (let [condition-proc (make-operation-proc (test-condition body))]
-           (fn [data]
-               (-> data
-                   (assoc :flag (condition-proc data))
-                   (update :pc inc)))))
+
+(defn parse-test [data body]
+  (-> data
+      (assoc :flag (parse-operation data (test-condition body)))
+      (update :pc inc)))
 
 (comment
-  (let [f (make-test-proc '(test (op =) (const 3) (reg bar)))]
-       (f {:registry-map {'bar 2 'foo 0}
-           :pc 0
-           :op-map {'= =}
-           :instructions []}))
-  (let [f (make-test-proc '(test (op =) (const 3) (reg bar)))]
-       (f {:registry-map {'bar 3 'foo 0}
-           :pc 0
-           :op-map {'= =}
-           :instructions []})))
+  (parse-test
+    {:registry-map {'bar 2 'foo 0}
+     :pc 0
+     :op-map {'= =}}
+    '(test (op =) (const 3) (reg bar)))
+  (parse-test
+    {:registry-map {'bar 2 'foo 0}
+     :pc 0
+     :op-map {'= =}}
+    '(test (op =) (const 2) (reg bar))))
 
 ; branch
 ; -------------
+
 (def branch-dest second)
-(defn make-branch-proc [body]
-      (let [dest-fn (make-primitive-proc (branch-dest body))]
-           (fn [data]
-               (if (:flag data)
-                 (assoc data :pc (dest-fn data))
-                 (update data :pc inc)))))
+(defn parse-branch [data body]
+  (let [dest (parse-primitive data (branch-dest body))]
+    (if (:flag data)
+      (assoc data :pc dest)
+      (update data :pc inc))))
 
 (comment
-  (let [f (make-branch-proc '(branch (label foo)))]
-       (f {:registry-map {}
-           :pc 0
-           :flag false
-           :op-map {'= =}
-           :instructions '[[nil (assign)] [nil (assign)] [foo nil]]}))
-  (let [f (make-branch-proc '(branch (label foo)))]
-       (f {:registry-map {'bar 3 'foo 0}
-           :pc 0
-           :flag true
-           :op-map {'= =}
-           :instructions '[[nil (assign)] [nil (assign)] [foo nil]]})))
+  (parse-branch
+    {:label->idx {'foo 10}
+     :flag false
+     :pc 0}
+    '(branch (label foo)))
+  (parse-branch
+    {:label->idx {'foo 10}
+     :flag true
+     :pc 0}
+    '(branch (label foo))))
 
 ; goto
 ; -------------
 (def goto-dest second)
-(defn make-goto-proc [body]
-      (let [dest-fn (make-primitive-proc (goto-dest body))]
-           (fn [data]
-               (assoc data :pc (dest-fn data)))))
+(defn parse-goto [data body]
+  (let [dest (parse-primitive data (goto-dest body))]
+    (assoc data :pc dest)))
 
 (comment
-  (let [f (make-goto-proc '(goto (label foo)))]
-       (f {:registry-map {}
-           :pc 0
-           :flag false
-           :op-map {'= =}
-           :instructions '[[nil (assign)] [nil (assign)] [foo nil]]}))
-  (let [f (make-goto-proc '(goto (reg foo)))]
-       (f {:registry-map {'foo 3}
-           :pc 0
-           :flag false
-           :op-map {'= =}
-           :instructions '[[nil (assign)] [nil (assign)] [foo nil]]})))
+  (parse-goto
+    {:label->idx {'foo 10}}
+    '(goto (label foo)))
+  (parse-goto
+    {:registry-map {'foo 5}}
+    '(goto (reg foo))))
 
-; save
+; parse
 ; -------------
 
-(def save-reg-name second)
-(defn make-save-proc [body]
-      (let [reg-name (save-reg-name body)]
-           (fn [data]
-               (let [reg-v (get-in data [:registry-map reg-name])]
-                    (-> data
-                        (update :stack conj reg-v)
-                        (update :pc inc))))))
-(comment
-  (let [f (make-save-proc '(save foo))]
-       (f {:registry-map {'foo 3}
-           :pc 0
-           :flag false
-           :op-map {'= =}
-           :instructions []
-           :stack []})))
-
-; restore
-; -------------
-(def restore-reg-name second)
-(defn make-restore-proc [body]
-      (let [reg-name (restore-reg-name body)]
-           (fn [data]
-               (let [v (last (:stack data))]
-                    (-> data
-                        (update :stack pop)
-                        (assoc-in [:registry-map reg-name] v)
-                        (update :pc inc))))))
-(comment
-  (let [f (make-restore-proc '(restore foo))]
-       (f {:registry-map {'foo 3}
-           :pc 0
-           :flag false
-           :op-map {'= =}
-           :instructions []
-           :stack [10]})))
-
-; perform
-; -------------
-(def perform-operation-exp rest)
-(defn make-perform-proc [body]
-      (let [value-proc (make-operation-proc (perform-operation-exp body))]
-           (fn [data]
-               (value-proc data)
-               (update data :pc inc))))
-
-(comment
-  (let [f (make-perform-proc '(preform (op reset!) (reg foo) (const 1)))]
-       (f {:registry-map {'foo (atom nil)}
-           :pc 0
-           :flag false
-           :op-map {'reset! reset!}
-           :instructions []
-           :stack [10]})))
-; analyze
-; -------------
-
-(def assign? (partial tag-of? 'assign))
-(def test? (partial tag-of? 'test))
-(def branch? (partial tag-of? 'branch))
-(def goto? (partial tag-of? 'goto))
-(def save? (partial tag-of? 'save))
-(def restore? (partial tag-of? 'restore))
-(def perform? (partial tag-of? 'perform))
-
-(defn make-execution-proc [body]
-      (cond
-        (assign? body)
-        (make-assign-proc body)
-
-        (test? body)
-        (make-test-proc body)
-
-        (branch? body)
-        (make-branch-proc body)
-
-        (goto? body)
-        (make-goto-proc body)
-
-        (save? body)
-        (make-save-proc body)
-
-        (restore? body)
-        (make-restore-proc body)
-
-        (perform? body)
-        (make-perform-proc body)
-
-        :else
-        (throw (Exception. (format "Unsupported instruction label %s" body)))))
+(defn parse-instruction [data body]
+  (let [type->f {'assign parse-assign
+                 'test parse-test
+                 'branch parse-branch
+                 'goto parse-goto}
+        f (or (type->f (body-tag body))
+              (throw (Exception. "unexpected instruction")))]
+    (f data body)))
 
 
 ; run
 ; -------------
 
 (defn run [registry-map op-map raw-instructions]
-      (let [[label->idx instructions] (assemble-instructions raw-instructions)
-            initial-data {:registry-map registry-map
-                          :op-map op-map
-                          :stack []
-                          :pc 0
-                          :flag nil
-                          :label->idx label->idx
-                          :instructions instructions}]
-           (loop [data initial-data]
-                 (if-let [f (instruction-fn
-                              (nth (:instructions data) (:pc data) nil))]
-                         (recur (f data))
-                         data))))
+  (let [[label->idx instructions] (extract-labels raw-instructions)
+        initial-data {:registry-map registry-map
+                      :op-map op-map
+                      :stack []
+                      :pc 0
+                      :flag nil
+                      :label->idx label->idx
+                      :instructions instructions}]
+    (loop [data initial-data]
+      (if-let [ins (nth (:instructions data) (:pc data) nil)]
+        (recur (parse-instruction data ins))
+        data))))
 
 (def default-op-map {'* * '/ /
                      '> > '>= >=
@@ -343,7 +218,7 @@
                      '= =})
 (comment
   (run
-    {'res 1 'counter 3 'base 10}
+    {'res 1 'counter 4 'base 10}
     default-op-map
     '(
        loop
