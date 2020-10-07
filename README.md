@@ -2,8 +2,11 @@
 
 Simple machine simulator: a complement to [this essay.](https://stopa.io/post/255)
 
+```bash
+clj
 ```
-clj 
+
+```clojure
 (require 'machine-simulator)
 (in-ns 'machine-simulator) 
 (get-in
