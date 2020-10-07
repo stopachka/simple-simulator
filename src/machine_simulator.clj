@@ -6,7 +6,7 @@
 (defn factorial [n]
   (loop [res 1
          counter 1]
-    (if (< n counter)
+    (if (> counter n)
       res
       (recur
         (* counter res)
